@@ -1,0 +1,24 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+  "frontend",
+  "node_modules",
+  "outputs",
+  "data",
+  "geography-dz2021-esri-shapefile",
+  "geography-dz2021-esri-shapefile.zip",
+]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+check_untyped_defs = false
+files = ["backend/app", "src", "scripts", "tests"]

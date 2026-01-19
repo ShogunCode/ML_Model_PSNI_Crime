@@ -17,7 +17,7 @@ def optimise_data_types(df):
     for col in object_cols.columns:
         num_unique_values = df[col].nunique()
         num_total_values = len(df[col])
-        if num_unique_values / num_total_values < 0.5:
+        if num_unique_values / num_total_values <= 0.5:
             df[col] = df[col].astype('category')
     
     return df
@@ -77,3 +77,33 @@ def calculate_area_sq_km(geometry_series):
 
 def extract_coordinates_from_geometry(geometry):
     return geometry.x, geometry.y
+
+def validate_required_columns(df, required_columns, df_name="data"):
+    missing = [col for col in required_columns if col not in df.columns]
+    return missing
+
+def validate_coordinate_ranges(df, lat_col="Latitude", lon_col="Longitude"):
+    issues = []
+    if lat_col not in df.columns or lon_col not in df.columns:
+        issues.append("Missing latitude/longitude columns.")
+        return issues
+
+    lat = pd.to_numeric(df[lat_col], errors="coerce")
+    lon = pd.to_numeric(df[lon_col], errors="coerce")
+    missing = lat.isna().sum() + lon.isna().sum()
+    if missing > 0:
+        issues.append(f"Found {missing} missing or non-numeric coordinates.")
+
+    out_of_range = ((lat < -90) | (lat > 90) | (lon < -180) | (lon > 180)).sum()
+    if out_of_range > 0:
+        issues.append(f"Found {out_of_range} coordinates outside valid ranges.")
+
+    return issues
+
+def summarize_population_coverage(df, population_col="Population"):
+    if population_col not in df.columns:
+        return {"missing_share": 1.0, "missing_count": len(df)}
+    missing_count = df[population_col].isna().sum()
+    total = len(df)
+    missing_share = missing_count / total if total else 0.0
+    return {"missing_share": missing_share, "missing_count": missing_count}

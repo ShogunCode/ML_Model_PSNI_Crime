@@ -1,0 +1,27 @@
+FROM python:3.11
+
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gdal-bin \
+    libgdal-dev \
+    libgeos-dev \
+    libproj-dev \
+    libpq-dev \
+    gcc \
+    g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-pipeline.txt /app/requirements-pipeline.txt
+RUN pip install --no-cache-dir -r /app/requirements-pipeline.txt
+
+COPY src /app/src
+COPY data /app/data
+COPY outputs /app/outputs
+COPY db /app/db
+COPY scripts /app/scripts
+COPY alembic.ini /app/alembic.ini
+
+CMD ["python", "src/main.py", "--run-all", "--write-postgres", "--no-prompt"]

@@ -1,0 +1,11 @@
+url,tables,rows,error
+outputs/council_email_html\council_emails_antrimandnewtownabbey_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_meetings_derrycityandstrabanedistrict_com.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_minutes_belfastcity_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_www_ardsandnorthdown_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_www_armaghbanbridgecraigavon_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_www_causewaycoastandglens_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_www_fermanaghomagh_com.html,1,0,
+outputs/council_email_html\council_emails_www_lisburncastlereagh_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_www_midandeastantrim_gov_uk.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+outputs/council_email_html\council_emails_www_newrymournedown_org.html,0,0,Parsing HTML requires 'lxml'. Install it with pip.

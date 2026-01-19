@@ -1,0 +1,85 @@
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    environment:
+      POSTGRES_DB: crimemap
+      POSTGRES_USER: crimemap
+      POSTGRES_PASSWORD: crimemap
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crimemap -d crimemap"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://crimemap:crimemap@db:5432/crimemap
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://crimemap:crimemap@db:5432/crimemap
+      CRIMEMAP_OUTPUT_DIR: /app/outputs
+      CRIMEMAP_HISTORY_PATH: /app/data/processed/crime_history.csv
+      CRIMEMAP_ALLOWED_ORIGINS: http://localhost:5173
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./data:/app/data
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: http://localhost:8000
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  pipeline-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://crimemap:crimemap@db:5432/crimemap
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+    command:
+      [
+        "python",
+        "src/main.py",
+        "--run-all",
+        "--write-postgres",
+        "--no-prompt",
+        "--use-history-for-analysis"
+      ]
+
+volumes:
+  db-data:

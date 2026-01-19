@@ -1,0 +1,19 @@
+- The map colour still hasn't changed for each ward - what was changed and how does this take effect in the code? Is the light blue the default colour used in the library used to render the map and can't be changed  (the colour change has been requested twice)
+- CORE VIEWS (clicking on each shows a single interactive window)
+- OPERATIONS (Admin controls - needs expanded - also add PSNI news scrape and display somewhere, maybe belfast live? look for an API for news that is free)
+- Need ideas for the Ops console button top right
+- add in how everything is calculated on the application - FAQs too
+- what is the point of risk filters? this seems redundant
+- epxose endpoints for modular approach
+- containerize application (frontend, backend, database)
+- namespace for error visability
+- make sure rates are to 100k to show equal weighting to wards
+- get report on this for the modular/container plans from LLM
+- Containerfile
+- Ward Intelligence - Show crimes for latest month. Average amount of crimes (do SQL queries on backend on the data?)
+                    - Info for elected officals, population count, ????
+
+                    docker stop crimemap-postgres
+docker rm crimemap-postgres
+docker run --name crimemap-postgres -e POSTGRES_PASSWORD=crimemap -e POSTGRES_DB=crimemap -p 5432:5432 -v crimemap_pgdata:/var/lib/postgresql/data -d postgis/postgis:15-3.4
+

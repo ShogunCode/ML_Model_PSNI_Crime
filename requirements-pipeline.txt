@@ -1,0 +1,10 @@
+folium
+geopandas
+numpy
+pandas
+psycopg[binary]
+pyproj
+requests
+scikit-learn
+shapely
+lxml

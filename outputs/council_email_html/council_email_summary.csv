@@ -1,0 +1,12 @@
+url,tables,rows,error
+https://antrimandnewtownabbey.gov.uk/councillors/,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://www.ardsandnorthdown.gov.uk/council/your-councillors,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://www.armaghbanbridgecraigavon.gov.uk/councillors/,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://minutes.belfastcity.gov.uk/mgMemberIndex.aspx?bcr=1,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://www.causewaycoastandglens.gov.uk/council/councillors,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://meetings.derrycityandstrabanedistrict.com/mgMemberIndex.aspx?bcr=1,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://www.fermanaghomagh.com/your-council/councillors/,1,0,
+https://www.lisburncastlereagh.gov.uk/en/council-and-performance/councillors-and-committees,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://www.midandeastantrim.gov.uk/council/councillors,0,0,Parsing HTML requires 'lxml'. Install it with pip.
+https://mid-ulster.cmis-ni.org/midulster/Councillors.aspx,0,0,"HTTPSConnectionPool(host='mid-ulster.cmis-ni.org', port=443): Max retries exceeded with url: /midulster/Councillors.aspx (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1002)')))"
+https://www.newrymournedown.org/your-councillors,0,0,Parsing HTML requires 'lxml'. Install it with pip.

@@ -43,3 +43,47 @@ def count_crimes_per_cluster(clusters):
 def merge_cluster_info(cluster_centers, cluster_counts):
     cluster_info = pd.merge(cluster_centers, cluster_counts, on='Cluster')
     return cluster_info
+
+def calculate_cluster_metrics(labels):
+    labels = np.asarray(labels)
+    total_points = len(labels)
+    noise_points = int((labels == -1).sum())
+    cluster_labels = labels[labels != -1]
+    if cluster_labels.size == 0:
+        return {
+            "total_points": total_points,
+            "noise_points": noise_points,
+            "noise_share": 1.0 if total_points else 0.0,
+            "cluster_count": 0,
+            "avg_cluster_size": 0,
+            "median_cluster_size": 0,
+            "min_cluster_size": 0,
+            "max_cluster_size": 0,
+        }
+
+    counts = pd.Series(cluster_labels).value_counts()
+    return {
+        "total_points": total_points,
+        "noise_points": noise_points,
+        "noise_share": noise_points / total_points if total_points else 0.0,
+        "cluster_count": int(counts.shape[0]),
+        "avg_cluster_size": float(counts.mean()),
+        "median_cluster_size": float(counts.median()),
+        "min_cluster_size": int(counts.min()),
+        "max_cluster_size": int(counts.max()),
+    }
+
+def dbscan_sweep(coordinates, eps_km_list, min_samples_list):
+    results = []
+    for eps_km in eps_km_list:
+        for min_samples in min_samples_list:
+            labels = apply_dbscan(coordinates, eps_km=eps_km, min_samples=min_samples)
+            metrics = calculate_cluster_metrics(labels)
+            results.append(
+                {
+                    "eps_km": eps_km,
+                    "min_samples": min_samples,
+                    **metrics,
+                }
+            )
+    return pd.DataFrame(results)
