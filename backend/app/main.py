@@ -3,9 +3,10 @@ import json
 import os
 import re
 import smtplib
+from collections.abc import Mapping
 from datetime import date, datetime, timezone, timedelta
 from email.message import EmailMessage
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,7 @@ def _repo_root():
 OUTPUT_DIR = os.getenv("CRIMEMAP_OUTPUT_DIR") or os.path.join(_repo_root(), "outputs")
 WARD_ANALYSIS_PATH = os.path.join(OUTPUT_DIR, "ward_crime_analysis.csv")
 WARD_OFFICIALS_PATH = os.path.join(OUTPUT_DIR, "ward_officials.csv")
+WARD_TYPE_TRENDS_PATH = os.path.join(OUTPUT_DIR, "ward_crime_type_trends.csv")
 GAP_REPORT_PATH = os.path.join(OUTPUT_DIR, "police_api_gap_report.csv")
 WARDS_MAP_PATH = os.path.join(OUTPUT_DIR, "wards_interactive_map.html")
 CRIME_HISTORY_PATH = os.getenv("CRIMEMAP_HISTORY_PATH") or os.path.join(
@@ -40,6 +42,21 @@ CLEANED_CRIME_PATH = os.getenv("CRIMEMAP_CLEANED_CRIME_PATH") or os.path.join(
 RAW_CRIME_PATH = os.getenv("CRIMEMAP_CRIME_PATH") or os.path.join(
     _repo_root(), "data", "raw", "crime_data.csv"
 )
+
+CORS_ORIGINS = os.getenv("CRIMEMAP_CORS_ORIGINS", "*")
+CORS_ALLOW_ORIGINS = [
+    origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()
+] or ["*"]
+
+app = FastAPI(title="PSNI Crime Map API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials="*" not in CORS_ALLOW_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/assets", StaticFiles(directory=OUTPUT_DIR, check_dir=False), name="assets")
 
 HARM_KEYWORDS = (
     ("violence", 10),
@@ -150,7 +167,7 @@ class WardDetailResponse(BaseModel):
     ward: WardRow
     rating_explain: dict
     crime_types: list[WardTypeTrend]
-    officials: list[WardOfficial] = []
+    officials: list[WardOfficial] = Field(default_factory=list)
     source: str
     coverage_start: str | None = None
     coverage_end: str | None = None
@@ -389,6 +406,14 @@ def _serialize_datetime(value):
     return str(value)
 
 
+def _row_to_dict(row: Mapping[str, Any] | Any) -> dict[str, Any]:
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "keys"):
+        return {key: row[key] for key in row.keys()}
+    return dict(row)
+
+
 def _parse_filter_json(value):
     if value in (None, ""):
         return None
@@ -577,10 +602,9 @@ def _latest_dataset(cursor):
         """
     )
     row = cursor.fetchone()
-    if row:
-        return dict(row) if not isinstance(row, dict) else row
-
-    return None
+    if not row:
+        return None
+    return _row_to_dict(row)
 
 
 def _latest_ward_dataset(cursor):
@@ -593,11 +617,11 @@ def _latest_ward_dataset(cursor):
         """
     )
     row = cursor.fetchone()
-    if row:
-        row_dict = dict(row) if not isinstance(row, dict) else row
-        row_dict["status"] = "completed"
-        return row_dict
-    return row
+    if not row:
+        return None
+    row_dict = _row_to_dict(row)
+    row_dict["status"] = "completed"
+    return row_dict
 
 
 def _latest_crime_dataset(cursor):
@@ -611,11 +635,11 @@ def _latest_crime_dataset(cursor):
         """
     )
     row = cursor.fetchone()
-    if row:
-        row_dict = dict(row) if not isinstance(row, dict) else row
-        row_dict["status"] = "completed"
-        return row_dict
-    return row
+    if not row:
+        return None
+    row_dict = _row_to_dict(row)
+    row_dict["status"] = "completed"
+    return row_dict
 
 
 def _load_ward_analysis_from_db():
@@ -649,7 +673,7 @@ def _load_ward_analysis_from_db():
 
     wards = []
     for row in rows:
-        row_dict = dict(row) if not isinstance(row, dict) else row
+        row_dict = _row_to_dict(row)
         crime_rate = row_dict.get("crime_rate_per_100k")
         if crime_rate is None:
             crime_rate = row_dict.get("annualized_crime_rate_per_100k")
@@ -795,7 +819,7 @@ def _load_gap_report_from_db(dataset_version=None, coverage_end=None):
 
     if not row:
         return None
-    row_dict = dict(row) if not isinstance(row, dict) else row
+    row_dict = _row_to_dict(row)
     checked_at = row_dict.get("checked_at")
     return {
         "checked_at": checked_at.isoformat() if checked_at else "",
@@ -866,19 +890,20 @@ def _ward_type_trends_from_db(cursor, dataset_version, coverage_end, ward_code, 
     )
     rows = []
     for row in cursor.fetchall():
+        row_dict = _row_to_dict(row)
         rows.append(
             {
-                "crime_type": row.get("crime_type") or "",
-                "crime_type_label": _crime_type_label(row.get("crime_type")),
-                "total_crimes": row.get("total_crimes"),
-                "avg_monthly": row.get("avg_monthly"),
-                "trend_change": row.get("trend_change"),
-                "trend_pct": row.get("trend_pct"),
-                "trend_slope": row.get("trend_slope"),
-                "months": row.get("months"),
-                "first_month": _format_month(row.get("first_month")) or "",
-                "last_month": _format_month(row.get("last_month")) or "",
-                "trend_direction": row.get("trend_direction") or "",
+                "crime_type": row_dict.get("crime_type") or "",
+                "crime_type_label": _crime_type_label(row_dict.get("crime_type")),
+                "total_crimes": row_dict.get("total_crimes"),
+                "avg_monthly": row_dict.get("avg_monthly"),
+                "trend_change": row_dict.get("trend_change"),
+                "trend_pct": row_dict.get("trend_pct"),
+                "trend_slope": row_dict.get("trend_slope"),
+                "months": row_dict.get("months"),
+                "first_month": _format_month(row_dict.get("first_month")) or "",
+                "last_month": _format_month(row_dict.get("last_month")) or "",
+                "trend_direction": row_dict.get("trend_direction") or "",
             }
         )
     return rows
@@ -918,14 +943,15 @@ def _ward_officials_from_db(cursor, ward_code):
     )
     officials = []
     for row in cursor.fetchall():
+        row_dict = _row_to_dict(row)
         officials.append(
             {
-                "name": row.get("official_name") or "",
-                "role": row.get("role") or "",
-                "party": row.get("party") or "",
-                "email": row.get("email") or "",
-                "phone": row.get("phone") or "",
-                "source": row.get("source") or "",
+                "name": row_dict.get("official_name") or "",
+                "role": row_dict.get("role") or "",
+                "party": row_dict.get("party") or "",
+                "email": row_dict.get("email") or "",
+                "phone": row_dict.get("phone") or "",
+                "source": row_dict.get("source") or "",
             }
         )
     return officials
@@ -1240,13 +1266,16 @@ def _fetch_ward_payloads(cursor, coverage_end):
     rows = cursor.fetchall()
     payloads = {}
     for row in rows:
-        payload = _ward_payload(row)
+        payload = _ward_payload(_row_to_dict(row))
         if payload.get("ward_code"):
             payloads[payload["ward_code"]] = payload
     return payloads
 
 
 def _alert_rule_row(row):
+    # Ensure row is a dict
+    if not isinstance(row, dict):
+        row = dict(row) if hasattr(row, '__iter__') else {}
     return {
         "id": row.get("id"),
         "name": row.get("name"),
@@ -1269,6 +1298,9 @@ def _alert_rule_row(row):
 
 
 def _alert_event_row(row):
+    # Ensure row is a dict
+    if not isinstance(row, dict):
+        row = dict(row) if hasattr(row, '__iter__') else row
     return {
         "id": row.get("id"),
         "alert_rule_id": row.get("alert_rule_id"),
@@ -1292,941 +1324,494 @@ def _alert_event_row(row):
     }
 
 
-def _evaluate_alerts(conn):
-    now = datetime.now(timezone.utc)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT DISTINCT coverage_end FROM ward_metrics "
-            "ORDER BY coverage_end DESC NULLS LAST LIMIT 2"
-        )
-        coverage_rows = cursor.fetchall()
-        if not coverage_rows:
-            return {"evaluated": 0, "created": 0, "coverage_end": None}
-        coverage_end = coverage_rows[0].get("coverage_end")
-        previous_end = (
-            coverage_rows[1].get("coverage_end") if len(coverage_rows) > 1 else None
-        )
-        cursor.execute(
-            """
-            SELECT dataset_version
-            FROM ward_metrics
-            WHERE coverage_end = %s
-            ORDER BY updated_at DESC NULLS LAST
-            LIMIT 1
-            """,
-            (coverage_end,),
-        )
-        dataset_row = cursor.fetchone() or {}
-        dataset_version = dataset_row.get("dataset_version")
-
-        cursor.execute(
-            """
-            SELECT *
-            FROM alert_rules
-            WHERE is_active = TRUE
-              AND (muted_until IS NULL OR muted_until <= NOW())
-            ORDER BY id
-            """
-        )
-        rules = cursor.fetchall()
-        if not rules:
-            return {
-                "evaluated": 0,
-                "created": 0,
-                "coverage_end": _format_month(coverage_end),
-            }
-
-        current_payloads = _fetch_ward_payloads(cursor, coverage_end)
-        previous_payloads = (
-            _fetch_ward_payloads(cursor, previous_end) if previous_end else {}
-        )
-
-        cursor.execute(
-            "SELECT alert_rule_id, ward_code FROM alert_events WHERE coverage_end = %s",
-            (coverage_end,),
-        )
-        existing = {
-            (row.get("alert_rule_id"), row.get("ward_code") or "")
-            for row in cursor.fetchall()
-        }
-
-        total_created = 0
-        total_evaluated = 0
-        for rule_row in rules:
-            rule = _alert_rule_row(rule_row)
-            rule_id = rule["id"]
-            matched_count = 0
-            created_count = 0
-            target_codes = (
-                [rule.get("ward_code")] if rule.get("ward_code") else current_payloads.keys()
-            )
-            for code in target_codes:
-                if not code:
-                    continue
-                ward = current_payloads.get(code)
-                if not ward:
-                    continue
-                total_evaluated += 1
-                match, observed_value, threshold_value = _rule_matches(ward, rule)
-                if not match:
-                    continue
-                matched_count += 1
-
-                if rule.get("trigger_on") == "enter":
-                    prev = previous_payloads.get(code)
-                    if prev:
-                        prev_match, _, _ = _rule_matches(prev, rule)
-                        if prev_match:
-                            continue
-
-                if (rule_id, code) in existing:
-                    continue
-
-                message = (
-                    f"Alert '{rule['name']}' triggered for {ward.get('ward_name')} ({code})."
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO alert_events (
-                        alert_rule_id, dataset_version, coverage_end, ward_code, ward_name,
-                        metric, operator, threshold_value, threshold_number, observed_value,
-                        observed_text, status, message, value_json, triggered_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'open', %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        rule_id,
-                        dataset_version,
-                        coverage_end,
-                        code,
-                        ward.get("ward_name"),
-                        rule.get("metric"),
-                        rule.get("operator"),
-                        rule.get("threshold_value"),
-                        rule.get("threshold_number"),
-                        observed_value if isinstance(observed_value, (int, float)) else None,
-                        observed_value if isinstance(observed_value, str) else None,
-                        message,
-                        json.dumps(
-                            {
-                                "rating_band": ward.get("rating_band"),
-                                "rating_score": ward.get("rating_score"),
-                                "crime_rate_per_100k": ward.get("crime_rate_per_100k"),
-                                "trend_slope": ward.get("trend_slope"),
-                                "trend_pct": ward.get("trend_pct"),
-                                "yoy_change": ward.get("yoy_change"),
-                                "harm_score_per_100k": ward.get("harm_score_per_100k"),
-                                "rate_percentile": ward.get("rate_percentile"),
-                                "trend_percentile": ward.get("trend_percentile"),
-                                "coverage_confidence": ward.get("coverage_confidence"),
-                            }
-                        ),
-                        now,
-                    ),
-                )
-                event_id = cursor.fetchone().get("id")
-                created_count += 1
-                total_created += 1
-                existing.add((rule_id, code))
-
-                recipients = rule.get("notify_emails") or []
-                if recipients:
-                    subject = f"CrimeMap Alert: {rule.get('name')}"
-                    body = (
-                        f"{message}\n\n"
-                        f"Coverage end: {_format_month(coverage_end)}\n"
-                        f"Rating band: {ward.get('rating_band')}\n"
-                        f"Rate / 100k: {ward.get('crime_rate_per_100k')}\n"
-                        f"Trend slope: {ward.get('trend_slope')}\n"
-                    )
-                    success, error = _send_alert_email(recipients, subject, body)
-                    status = "sent" if success else "failed"
-                    cursor.execute(
-                        """
-                        INSERT INTO alert_notifications
-                        (alert_event_id, channel, recipient, status, sent_at, error)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            event_id,
-                            "email",
-                            ", ".join(recipients),
-                            status,
-                            now if success else None,
-                            error,
-                        ),
-                    )
-
-            cursor.execute(
-                """
-                INSERT INTO alert_rule_runs
-                (alert_rule_id, dataset_version, coverage_end, evaluated_at,
-                 matched_count, created_count, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    rule_id,
-                    dataset_version,
-                    coverage_end,
-                    now,
-                    matched_count,
-                    created_count,
-                    "completed",
-                ),
-            )
-
-        return {
-            "evaluated": total_evaluated,
-            "created": total_created,
-            "coverage_end": _format_month(coverage_end),
-            "dataset_version": dataset_version,
-        }
+def _month_to_date(value):
+    month = _normalize_month(value)
+    if not month:
+        return None
+    try:
+        return datetime.strptime(month, "%Y-%m").date()
+    except ValueError:
+        return None
 
 
-def _load_wards():
+def _load_ward_dataset():
     wards, dataset = _load_ward_analysis_from_db()
-    if wards is not None:
-        return wards, "db", dataset
-    return _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH), "csv", None
+    if wards:
+        return wards, dataset, "db"
+    wards = _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH)
+    if wards:
+        return wards, dataset, "csv"
+    return [], dataset, "none"
 
 
-def _load_summary(wards, source):
-    if not wards:
-        return {
-            "source": source or "empty",
-            "total_wards": 0,
-            "high_crime_wards": 0,
-            "avg_rate_per_100k": None,
-            "latest_month": None,
-            "band_counts": {},
-            "total_population": None,
-            "sparkline": [],
-        }
-
-    total_wards = len(wards)
-    high_crime = sum(1 for ward in wards if ward["high_crime_rate"])
-    rate_values = [
-        ward["crime_rate_per_100k"]
-        for ward in wards
-        if ward["crime_rate_per_100k"] is not None
-    ]
-    avg_rate = sum(rate_values) / len(rate_values) if rate_values else None
-
-    latest = None
-    for ward in wards:
-        last_month = ward.get("last_month")
-        if not last_month:
-            continue
-        try:
-            month_val = datetime.strptime(last_month, "%Y-%m")
-        except ValueError:
-            continue
-        if latest is None or month_val > latest:
-            latest = month_val
-
-    band_counts = {}
-    total_population = 0
-    population_count = 0
-    for ward in wards:
-        band = ward.get("rating_band") or "Unknown"
-        band_counts[band] = band_counts.get(band, 0) + 1
-        if ward.get("population") is not None:
-            total_population += ward["population"]
-            population_count += 1
-
-    latest_month = latest.strftime("%Y-%m") if latest else None
+def _gap_report_payload(row):
+    if not row:
+        return None
+    checked_at = row.get("checked_at") or row.get("CheckedAt") or ""
+    checked_at = _serialize_datetime(_parse_iso_datetime(checked_at)) or checked_at
+    history_latest = row.get("history_latest") or row.get("HistoryLatest")
+    latest_available = row.get("latest_available") or row.get("LatestAvailable")
+    default_start = row.get("default_start_month") or row.get("DefaultStartMonth")
+    gap_months = row.get("gap_months") or row.get("GapMonths")
     return {
-        "source": source,
-        "total_wards": total_wards,
-        "high_crime_wards": high_crime,
-        "avg_rate_per_100k": round(avg_rate, 2) if avg_rate is not None else None,
-        "latest_month": latest_month,
-        "band_counts": band_counts,
-        "total_population": total_population if population_count else None,
-        "sparkline": _load_history_sparkline(CRIME_HISTORY_PATH, window=6),
+        "checked_at": checked_at,
+        "history_latest": _format_month(history_latest) or "",
+        "latest_available": _format_month(latest_available) or "",
+        "gap_months": _parse_int(gap_months),
+        "default_start_month": _format_month(default_start) or "",
     }
 
 
-def _build_ward_filters_sql(
-    query=None,
-    band=None,
-    min_rate_percentile=None,
-    max_rate_percentile=None,
-    min_trend_slope=None,
-    max_trend_slope=None,
-    min_yoy_change=None,
-    max_yoy_change=None,
-    coverage_confidence=None,
-):
-    clauses = []
-    params = []
-    if query:
-        clauses.append("(ward_name ILIKE %s OR ward_code ILIKE %s)")
-        like = f"%{query}%"
-        params.extend([like, like])
-    if band:
-        clauses.append("LOWER(rating_band) = LOWER(%s)")
-        params.append(band)
-    if min_rate_percentile is not None:
-        clauses.append("rate_percentile >= %s")
-        params.append(min_rate_percentile)
-    if max_rate_percentile is not None:
-        clauses.append("rate_percentile <= %s")
-        params.append(max_rate_percentile)
-    if min_trend_slope is not None:
-        clauses.append("trend_slope >= %s")
-        params.append(min_trend_slope)
-    if max_trend_slope is not None:
-        clauses.append("trend_slope <= %s")
-        params.append(max_trend_slope)
-    if min_yoy_change is not None:
-        clauses.append("yoy_change >= %s")
-        params.append(min_yoy_change)
-    if max_yoy_change is not None:
-        clauses.append("yoy_change <= %s")
-        params.append(max_yoy_change)
-    if coverage_confidence:
-        clauses.append(f"{COVERAGE_CONFIDENCE_SQL} = %s")
-        params.append(coverage_confidence)
-    return clauses, params
-
-
-def _resolve_sort(sort):
-    sort_map = {
-        "rating": "rating_score",
-        "rating_score": "rating_score",
-        "crime_rate": "crime_rate_per_100k",
-        "crime_rate_per_100k": "crime_rate_per_100k",
-        "rate_percentile": "rate_percentile",
-        "trend": "trend_slope",
-        "trend_slope": "trend_slope",
-        "trend_pct": "trend_pct",
-        "yoy": "yoy_change",
-        "yoy_change": "yoy_change",
-        "band": "rating_band",
-        "rating_band": "rating_band",
-        "coverage": "coverage_confidence",
-        "coverage_confidence": "coverage_confidence",
-        "ward": "ward_name",
-        "ward_name": "ward_name",
-        "harm_score_per_100k": "harm_score_per_100k",
+def _map_info():
+    return {
+        "wards_map_url": f"/assets/{os.path.basename(WARDS_MAP_PATH)}",
+        "exists": os.path.exists(WARDS_MAP_PATH),
     }
-    return sort_map.get(sort or "", "rating_score")
 
 
-def _sort_clause(sort_key):
-    if sort_key == "coverage_confidence":
-        return (
-            "CASE "
-            "WHEN " + COVERAGE_CONFIDENCE_SQL + " = 'high' THEN 3 "
-            "WHEN " + COVERAGE_CONFIDENCE_SQL + " = 'medium' THEN 2 "
-            "ELSE 1 END"
-        )
-    return sort_key
+def _count_csv_rows(path):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, newline="", encoding="utf-8") as handle:
+            total = sum(1 for _ in handle)
+    except OSError:
+        return None
+    if total <= 1:
+        return 0
+    return total - 1
 
 
-def _normalize_order(order):
-    return "asc" if str(order).lower() == "asc" else "desc"
+def _quality_from_wards(wards):
+    population_missing = 0
+    short_history = 0
+    confidence_counts = {"high": 0, "medium": 0, "low": 0}
+    for ward in wards:
+        population = ward.get("population")
+        months = ward.get("months")
+        if population in (None, 0):
+            population_missing += 1
+        if months is None or months < 6:
+            short_history += 1
+        confidence = _coverage_confidence(population, months)
+        confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+    total = len(wards)
+    population_missing_pct = (population_missing / total * 100) if total else None
+    short_history_pct = (short_history / total * 100) if total else None
+    return {
+        "population_missing": population_missing,
+        "population_missing_pct": population_missing_pct,
+        "short_history": short_history,
+        "short_history_pct": short_history_pct,
+        "confidence_counts": confidence_counts,
+    }
 
 
-def _harm_case_sql():
-    parts = []
-    for keyword, score in HARM_KEYWORDS:
-        pattern = f"'%{keyword}%'"
-        parts.append(f"WHEN crime_type ILIKE {pattern} THEN {score}")
-    return "CASE " + " ".join(parts) + " ELSE 1 END"
+def _sort_value(value, reverse):
+    if isinstance(value, str):
+        if not value:
+            return "" if reverse else "~~~~"
+        return value.lower()
+    if value is None:
+        return float("-inf") if reverse else float("inf")
+    return value
 
 
-app = FastAPI(title="CrimeMap API", version="0.1.0")
+def _find_ward(wards, ward_code):
+    needle = str(ward_code or "").strip().lower()
+    for ward in wards:
+        code = str(ward.get("ward_code") or "").strip().lower()
+        if code == needle:
+            return ward
+    return None
 
-origins = os.getenv("CRIMEMAP_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[origin.strip() for origin in origins if origin.strip()],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-app.mount("/assets", StaticFiles(directory=OUTPUT_DIR), name="assets")
+def _timeseries_from_csv(ward_code, crime_type=None):
+    if not os.path.exists(CLEANED_CRIME_PATH):
+        return {}, {}
+    counts = {}
+    harms = {}
+    needle = str(ward_code or "").strip().lower()
+    crime_text = str(crime_type or "").strip().lower() if crime_type else None
+    with open(CLEANED_CRIME_PATH, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            row_code = str(row.get("WardCode") or row.get("ward_code") or "").strip().lower()
+            if row_code != needle:
+                continue
+            row_crime = row.get("Crime type") or row.get("crime_type") or ""
+            if crime_text and str(row_crime).strip().lower() != crime_text:
+                continue
+            month = _normalize_month(row.get("Month"))
+            if not month:
+                continue
+            counts[month] = counts.get(month, 0) + 1
+            harms[month] = harms.get(month, 0) + _harm_weight(row_crime)
+    return counts, harms
+
+
+def _timeseries_from_db(ward_code, crime_type=None):
+    conn = _db_connect()
+    if not conn:
+        return {}, {}, None
+    counts = {}
+    harms = {}
+    source = None
+    try:
+        with conn.cursor() as cursor:
+            dataset = _latest_crime_dataset(cursor)
+            if dataset:
+                dataset = _row_to_dict(dataset)
+            dataset_version = dataset.get("dataset_version") if dataset else None
+            params = []
+            where = [sql.SQL("ward_code = %s")]
+            params.append(ward_code)
+            if dataset_version:
+                where.append(sql.SQL("dataset_version = %s"))
+                params.append(dataset_version)
+            if crime_type:
+                where.append(sql.SQL("crime_type = %s"))
+                params.append(crime_type)
+            query = sql.SQL(
+                "SELECT month, crime_type, COUNT(*) AS count "
+                "FROM crimes "
+                "WHERE {where} "
+                "GROUP BY month, crime_type "
+                "ORDER BY month"
+            ).format(where=sql.SQL(" AND ").join(where))
+            cursor.execute(query, params)
+            for row in cursor.fetchall():
+                row_dict = _row_to_dict(row)
+                month = _format_month(row_dict.get("month"))
+                if not month:
+                    continue
+                count = row_dict.get("count")
+                if count is None:
+                    continue
+                counts[month] = counts.get(month, 0) + count
+                harms[month] = harms.get(month, 0) + count * _harm_weight(row_dict.get("crime_type"))
+            source = "db"
+    except Exception:
+        return {}, {}, None
+    finally:
+        conn.close()
+    return counts, harms, source
 
 
 @app.get("/api/health")
-def health():
+def health_check():
     return {"status": "ok"}
 
 
 @app.get("/api/summary")
-def summary():
-    wards, source, _ = _load_wards()
-    return _load_summary(wards, source)
+def get_summary():
+    wards, dataset, source = _load_ward_dataset()
+    coverage_start, coverage_end = _coverage_from_wards(wards)
+    latest_month = None
+    if dataset:
+        latest_month = _format_month(dataset.get("coverage_end"))
+    if not latest_month:
+        latest_month = coverage_end
+    total_population = sum((ward.get("population") or 0) for ward in wards)
+    total_crimes = 0
+    high_crime_wards = 0
+    rate_values = []
+    band_counts = {}
+    for ward in wards:
+        total_crimes += ward.get("total_crimes") or ward.get("number_of_crimes") or 0
+        if ward.get("high_crime_rate") or (ward.get("rating_band") or "").lower() == "high":
+            high_crime_wards += 1
+        rate = ward.get("crime_rate_per_100k")
+        if rate is not None:
+            rate_values.append(rate)
+        band = ward.get("rating_band") or "Unknown"
+        band_counts[band] = band_counts.get(band, 0) + 1
+    for key in ("High", "Elevated", "Watch", "Stable"):
+        band_counts.setdefault(key, 0)
+    avg_rate = round(sum(rate_values) / len(rate_values), 2) if rate_values else None
+    sparkline = _load_history_sparkline(CRIME_HISTORY_PATH)
+    return {
+        "latest_month": latest_month,
+        "avg_rate_per_100k": avg_rate,
+        "band_counts": band_counts,
+        "total_wards": len(wards),
+        "total_crimes": total_crimes,
+        "total_population": total_population,
+        "high_crime_wards": high_crime_wards,
+        "sparkline": sparkline,
+        "source": source,
+    }
 
-@app.get("/api/v2/summary", tags=["v2"], response_model=dict)
-def summary_v2():
-    wards, source, _ = _load_wards()
-    return _load_summary(wards, source)
+
+@app.get("/api/gap-report")
+def get_gap_report():
+    report = _load_gap_report_from_db()
+    source = "db" if report else "csv"
+    if not report:
+        report = _gap_report_payload(_load_gap_report_from_csv(GAP_REPORT_PATH))
+    if not report:
+        return {"source": "none"}
+    report["source"] = source
+    return report
+
+
+@app.get("/api/map")
+def get_map_info():
+    return _map_info()
 
 
 @app.get("/api/wards")
-def wards(limit: int = Query(0, ge=0), sort: str = Query("rating")):
-    ward_rows, _, _ = _load_wards()
-    if sort == "rate":
-        ward_rows.sort(key=lambda row: row.get("crime_rate_per_100k") or 0, reverse=True)
-    elif sort == "trend":
-        ward_rows.sort(key=lambda row: row.get("trend_slope") or 0, reverse=True)
-    else:
-        ward_rows.sort(key=lambda row: row.get("rating_score") or 0, reverse=True)
-
-    if limit:
-        ward_rows = ward_rows[:limit]
-    return ward_rows
-
-
-@app.get("/api/v2/wards", tags=["v2", "wards"], response_model=WardListResponse)
-def wards_v2(
-    q: str | None = Query(None, description="Search by ward name or code."),
-    band: str | None = Query(None, description="Filter by rating band."),
-    min_rate_percentile: float | None = Query(
-        None, ge=0, le=100, description="Minimum rate percentile."
-    ),
-    max_rate_percentile: float | None = Query(
-        None, ge=0, le=100, description="Maximum rate percentile."
-    ),
-    min_trend_slope: float | None = Query(None, description="Minimum trend slope."),
-    max_trend_slope: float | None = Query(None, description="Maximum trend slope."),
-    min_yoy_change: float | None = Query(None, description="Minimum YoY change."),
-    max_yoy_change: float | None = Query(None, description="Maximum YoY change."),
-    coverage_confidence: str | None = Query(
-        None, description="Filter by coverage confidence (high|medium|low)."
-    ),
-    sort: str = Query("rating_score", description="Sort field."),
-    order: str = Query("desc", description="Sort order (asc|desc)."),
-    limit: int = Query(50, ge=1, le=200),
+def list_wards_legacy(
+    q: str | None = None,
+    band: str | None = None,
+    coverage_confidence: str | None = None,
+    min_rate_percentile: float | None = None,
+    max_rate_percentile: float | None = None,
+    min_trend_slope: float | None = None,
+    max_trend_slope: float | None = None,
+    min_yoy_change: float | None = None,
+    max_yoy_change: float | None = None,
+    sort: str = "rating_score",
+    order: Literal["asc", "desc"] = "desc",
+    limit: int = Query(50, ge=1),
     offset: int = Query(0, ge=0),
 ):
-    query = q.strip() if q else None
-    band_value = band.strip() if band else None
-    if band_value and band_value.lower() == "all":
-        band_value = None
-    confidence_value = coverage_confidence.strip().lower() if coverage_confidence else None
-    if confidence_value == "all":
-        confidence_value = None
-
-    sort_key = _resolve_sort(sort)
-    order = _normalize_order(order)
-    min_rate = _to_fraction(min_rate_percentile)
-    max_rate = _to_fraction(max_rate_percentile)
-
-    conn = _db_connect()
-    if conn:
-        try:
-            with conn.cursor() as cursor:
-                dataset = _latest_dataset(cursor) or _latest_ward_dataset(cursor)
-                if not dataset:
-                    return WardListResponse(
-                        items=[],
-                        total=0,
-                        limit=limit,
-                        offset=offset,
-                        sort=sort_key,
-                        order=order,
-                        source="db",
-                        filters={},
-                        coverage_start=None,
-                        coverage_end=None,
-                    )
-                dataset_dict = dict(dataset) if not isinstance(dataset, dict) else dataset
-                dataset_version = dataset_dict.get("dataset_version")
-                coverage_end = dataset_dict.get("coverage_end")
-                coverage_start = dataset_dict.get("coverage_start")
-
-                clauses, params = _build_ward_filters_sql(
-                    query=query,
-                    band=band_value,
-                    min_rate_percentile=min_rate,
-                    max_rate_percentile=max_rate,
-                    min_trend_slope=min_trend_slope,
-                    max_trend_slope=max_trend_slope,
-                    min_yoy_change=min_yoy_change,
-                    max_yoy_change=max_yoy_change,
-                    coverage_confidence=confidence_value,
-                )
-                where_parts = ["dataset_version = %s", "coverage_end = %s"] + clauses
-                where = " AND ".join(where_parts)
-                base_params = [dataset_version, coverage_end] + params
-
-                cursor.execute(
-                    sql.SQL("SELECT COUNT(*) AS total FROM ward_metrics WHERE ") + sql.SQL(where),
-                    base_params,
-                )
-                total = cursor.fetchone().get("total") or 0
-
-                order_expr = _sort_clause(sort_key)
-                cursor.execute(
-                    sql.SQL("SELECT ward_code, ward_name, population, number_of_crimes, crime_rate_per_100k,"
-                    "       rate_percentile, rate_rank, high_crime_rate, total_crimes, avg_monthly,"
-                    "       trend_change, trend_pct, trend_slope, yoy_current, yoy_prior, yoy_change,"
-                    "       total_harm, harm_score_per_100k, months, first_month, last_month,"
-                    "       rating_score, rating_band, trend_percentile, annualized_crime_rate_per_100k "
-                    "FROM ward_metrics "
-                    "WHERE ") + sql.SQL(where) + sql.SQL(" "
-                    "ORDER BY ") + sql.SQL(order_expr) + sql.SQL(" " + order + " NULLS LAST, ward_name ASC "
-                    "LIMIT %s OFFSET %s"),
-                    base_params + [limit, offset],
-                )
-                items = [_ward_payload(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
-
-        return WardListResponse(
-            items=items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            sort=sort_key,
-            order=order,
-            source="db",
-            filters={
-                "q": query,
-                "band": band_value,
-                "min_rate_percentile": min_rate_percentile,
-                "max_rate_percentile": max_rate_percentile,
-                "min_trend_slope": min_trend_slope,
-                "max_trend_slope": max_trend_slope,
-                "min_yoy_change": min_yoy_change,
-                "max_yoy_change": max_yoy_change,
-                "coverage_confidence": confidence_value,
-            },
-            coverage_start=_format_month(coverage_start),
-            coverage_end=_format_month(coverage_end),
-        )
-
-    wards = _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH)
-    coverage_start, coverage_end = _coverage_from_wards(wards)
-    filtered = _filter_ward_rows(
-        wards,
-        query=query,
-        band=band_value,
+    return list_wards_v2(
+        q=q,
+        band=band,
+        coverage_confidence=coverage_confidence,
         min_rate_percentile=min_rate_percentile,
         max_rate_percentile=max_rate_percentile,
         min_trend_slope=min_trend_slope,
         max_trend_slope=max_trend_slope,
         min_yoy_change=min_yoy_change,
         max_yoy_change=max_yoy_change,
-        coverage_confidence=confidence_value,
-    )
-
-    def sort_value(row):
-        if sort_key == "ward_name":
-            return row.get("ward_name") or ""
-        if sort_key == "coverage_confidence":
-            return {"low": 1, "medium": 2, "high": 3}.get(
-                row.get("coverage_confidence") or "low", 1
-            )
-        if sort_key == "rating_band":
-            order_map = {"High": 4, "Elevated": 3, "Watch": 2, "Stable": 1}
-            return order_map.get(row.get("rating_band"), 0)
-        return row.get(sort_key) if row.get(sort_key) is not None else 0
-
-    filtered.sort(key=sort_value, reverse=order == "desc")
-    total = len(filtered)
-    items = filtered[offset : offset + limit]
-
-    return WardListResponse(
-        items=items,
-        total=total,
+        sort=sort,
+        order=order,
         limit=limit,
         offset=offset,
-        sort=sort_key,
-        order=order,
-        source="csv",
-        filters={
-            "q": query,
-            "band": band_value,
+    )
+
+
+@app.get("/api/v2/wards", response_model=WardListResponse)
+def list_wards_v2(
+    q: str | None = None,
+    band: str | None = None,
+    coverage_confidence: str | None = None,
+    min_rate_percentile: float | None = None,
+    max_rate_percentile: float | None = None,
+    min_trend_slope: float | None = None,
+    max_trend_slope: float | None = None,
+    min_yoy_change: float | None = None,
+    max_yoy_change: float | None = None,
+    sort: str = "rating_score",
+    order: Literal["asc", "desc"] = "desc",
+    limit: int = Query(50, ge=1),
+    offset: int = Query(0, ge=0),
+):
+    wards, dataset, source = _load_ward_dataset()
+    rows = _filter_ward_rows(
+        wards,
+        query=q,
+        band=band,
+        min_rate_percentile=min_rate_percentile,
+        max_rate_percentile=max_rate_percentile,
+        min_trend_slope=min_trend_slope,
+        max_trend_slope=max_trend_slope,
+        min_yoy_change=min_yoy_change,
+        max_yoy_change=max_yoy_change,
+        coverage_confidence=coverage_confidence,
+    )
+    sort_key = sort or "rating_score"
+    if sort_key in ("ward", "name"):
+        sort_key = "ward_name"
+    reverse = order == "desc"
+    rows.sort(key=lambda item: _sort_value(item.get(sort_key), reverse), reverse=reverse)
+    total = len(rows)
+    items = rows[offset : offset + limit]
+    coverage_start, coverage_end = _coverage_from_wards(wards)
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort_key,
+        "order": order,
+        "source": source,
+        "filters": {
+            "q": q,
+            "band": band,
+            "coverage_confidence": coverage_confidence,
             "min_rate_percentile": min_rate_percentile,
             "max_rate_percentile": max_rate_percentile,
             "min_trend_slope": min_trend_slope,
             "max_trend_slope": max_trend_slope,
             "min_yoy_change": min_yoy_change,
             "max_yoy_change": max_yoy_change,
-            "coverage_confidence": confidence_value,
         },
-        coverage_start=coverage_start,
-        coverage_end=coverage_end,
-    )
-
-
-@app.get("/api/v2/wards/{ward_code}", tags=["v2", "wards"], response_model=WardDetailResponse)
-def ward_detail(ward_code: str):
-    conn = _db_connect()
-    if conn:
-        try:
-            with conn.cursor() as cursor:
-                dataset = _latest_dataset(cursor) or _latest_ward_dataset(cursor)
-                if not dataset:
-                    raise HTTPException(status_code=404, detail="Ward not found")
-                dataset_version = dataset.get("dataset_version")
-                coverage_end = dataset.get("coverage_end")
-                coverage_start = dataset.get("coverage_start")
-                cursor.execute(
-                    """
-                    SELECT ward_code, ward_name, population, number_of_crimes, crime_rate_per_100k,
-                           rate_percentile, rate_rank, high_crime_rate, total_crimes, avg_monthly,
-                           trend_change, trend_pct, trend_slope, yoy_current, yoy_prior, yoy_change,
-                           total_harm, harm_score_per_100k, months, first_month, last_month,
-                           rating_score, rating_band, trend_percentile, annualized_crime_rate_per_100k
-                    FROM ward_metrics
-                    WHERE dataset_version = %s AND coverage_end = %s AND ward_code = %s
-                    LIMIT 1
-                    """,
-                    (dataset_version, coverage_end, ward_code),
-                )
-                row = cursor.fetchone()
-                if not row:
-                    raise HTTPException(status_code=404, detail="Ward not found")
-                ward = _ward_payload(row)
-
-                if ward.get("rate_percentile") is None:
-                    cursor.execute(
-                        """
-                        SELECT pct FROM (
-                            SELECT ward_code,
-                                   percent_rank() OVER (ORDER BY crime_rate_per_100k) AS pct
-                            FROM ward_metrics
-                            WHERE dataset_version = %s AND coverage_end = %s
-                        ) ranked
-                        WHERE ward_code = %s
-                        """,
-                        (dataset_version, coverage_end, ward_code),
-                    )
-                    pct_row = cursor.fetchone()
-                    if pct_row and pct_row.get("pct") is not None:
-                        ward["rate_percentile"] = _as_percent(pct_row.get("pct"))
-
-                if ward.get("trend_percentile") is None:
-                    cursor.execute(
-                        """
-                        SELECT pct FROM (
-                            SELECT ward_code,
-                                   percent_rank() OVER (ORDER BY trend_slope) AS pct
-                            FROM ward_metrics
-                            WHERE dataset_version = %s AND coverage_end = %s
-                        ) ranked
-                        WHERE ward_code = %s
-                        """,
-                        (dataset_version, coverage_end, ward_code),
-                    )
-                    pct_row = cursor.fetchone()
-                    if pct_row and pct_row.get("pct") is not None:
-                        ward["trend_percentile"] = _as_percent(pct_row.get("pct"))
-
-                if ward.get("rating_score") is None:
-                    rate_weight = (
-                        ward["rate_percentile"] / 100 if ward.get("rate_percentile") else 0
-                    )
-                    trend_weight = (
-                        ward["trend_percentile"] / 100 if ward.get("trend_percentile") else 0
-                    )
-                    ward["rating_score"] = round((0.7 * rate_weight + 0.3 * trend_weight) * 100, 1)
-                if ward.get("rating_band") is None:
-                    ward["rating_band"] = _rating_band(ward.get("rating_score"))
-
-                crime_types = _ward_type_trends_from_db(
-                    cursor, dataset_version, coverage_end, ward_code
-                )
-                try:
-                    officials = _ward_officials_from_db(cursor, ward_code)
-                except Exception:
-                    officials = []
-        finally:
-            conn.close()
-
-        return WardDetailResponse(
-            ward=ward,
-            rating_explain=_rating_explain(ward),
-            crime_types=crime_types,
-            officials=officials,
-            source="db",
-            coverage_start=_format_month(coverage_start),
-            coverage_end=_format_month(coverage_end),
-        )
-
-    wards = _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH)
-    row = next((item for item in wards if item.get("ward_code") == ward_code), None)
-    if not row:
-        raise HTTPException(status_code=404, detail="Ward not found")
-    ward = _ward_payload(row)
-    crime_types = _ward_type_trends_from_csv(
-        os.path.join(OUTPUT_DIR, "ward_crime_type_trends.csv"),
-        ward_code,
-    )
-    officials = _ward_officials_from_csv(WARD_OFFICIALS_PATH, ward_code)
-    coverage_start, coverage_end = _coverage_from_wards(wards)
-    return WardDetailResponse(
-        ward=ward,
-        rating_explain=_rating_explain(ward),
-        crime_types=crime_types,
-        officials=officials,
-        source="csv",
-        coverage_start=coverage_start,
-        coverage_end=coverage_end,
-    )
-
-
-def _month_to_date(value):
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m").date()
-    except ValueError:
-        return None
-
-
-def _timeseries_from_csv(ward_code, metric, crime_type, start, end):
-    ward_name = ""
-    population = None
-    wards = _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH)
-    for row in wards:
-        if row.get("ward_code") == ward_code:
-            ward_name = row.get("ward_name") or ""
-            population = row.get("population")
-            break
-
-    counts = {}
-    harms = {}
-    candidates = [CLEANED_CRIME_PATH, CRIME_HISTORY_PATH, RAW_CRIME_PATH]
-    for path in candidates:
-        if not os.path.exists(path):
-            continue
-        with open(path, newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            fieldnames = reader.fieldnames or []
-            code_key = (
-                "WardCode"
-                if "WardCode" in fieldnames
-                else "WardCode_w"
-                if "WardCode_w" in fieldnames
-                else None
-            )
-            type_key = (
-                "Crime type" if "Crime type" in fieldnames else "CrimeType" if "CrimeType" in fieldnames else None
-            )
-            month_key = "Month" if "Month" in fieldnames else "month" if "month" in fieldnames else None
-            if not code_key or not type_key or not month_key:
-                continue
-            for row in reader:
-                if str(row.get(code_key) or "").strip() != str(ward_code):
-                    continue
-                if crime_type and str(row.get(type_key) or "").strip().lower() != str(crime_type).strip().lower():
-                    continue
-                month = _normalize_month(row.get(month_key))
-                if not month:
-                    continue
-                if start and month < start:
-                    continue
-                if end and month > end:
-                    continue
-                counts[month] = counts.get(month, 0) + 1
-                harms[month] = harms.get(month, 0) + _harm_weight(row.get(type_key))
-        if counts:
-            break
-
-    points, values = _build_timeseries_points(
-        counts, harms, metric, population, start, end
-    )
-
-    return TimeSeriesResponse(
-        ward_code=ward_code,
-        ward_name=ward_name,
-        metric=metric,
-        crime_type=crime_type,
-        points=points,
-        summary=TimeSeriesSummary(**_series_summary(values)),
-        source="csv",
-        coverage_start=start,
-        coverage_end=end,
-    )
-
-
-@app.get(
-    "/api/v2/wards/{ward_code}/timeseries",
-    tags=["v2", "timeseries"],
-    response_model=TimeSeriesResponse,
-)
-def ward_timeseries(
-    ward_code: str,
-    metric: str = Query("rate", pattern="^(rate|harm|count)$"),
-    crime_type: str | None = Query(
-        None, alias="type", description="Filter by crime type."
-    ),
-    start: str | None = Query(None, description="Start month YYYY-MM."),
-    end: str | None = Query(None, description="End month YYYY-MM."),
-):
-    start_date = _month_to_date(start)
-    end_date = _month_to_date(end)
-
-    conn = _db_connect()
-    if conn:
-        try:
-            with conn.cursor() as cursor:
-                dataset = _latest_crime_dataset(cursor)
-                if not dataset:
-                    return TimeSeriesResponse(
-                        ward_code=ward_code,
-                        ward_name="",
-                        metric=metric,
-                        crime_type=crime_type,
-                        points=[],
-                        summary=TimeSeriesSummary(window=3),
-                        source="db",
-                    )
-                dataset_version = dataset.get("dataset_version")
-                coverage_end = dataset.get("coverage_end")
-                cursor.execute(
-                    """
-                    SELECT ward_name, population
-                    FROM ward_metrics
-                    WHERE dataset_version = %s AND ward_code = %s
-                    ORDER BY coverage_end DESC NULLS LAST
-                    LIMIT 1
-                    """,
-                    (dataset_version, ward_code),
-                )
-                ward_meta = cursor.fetchone() or {}
-                ward_name = ward_meta.get("ward_name") or ""
-                population = ward_meta.get("population")
-
-                clauses = ["dataset_version = %s", "ward_code = %s"]
-                params = [dataset_version, ward_code]
-                if crime_type:
-                    clauses.append("LOWER(crime_type) = LOWER(%s)")
-                    params.append(crime_type)
-                if start_date:
-                    clauses.append("month >= %s")
-                    params.append(start_date)
-                if end_date:
-                    clauses.append("month <= %s")
-                    params.append(end_date)
-
-                harm_case = _harm_case_sql()
-                cursor.execute(
-                    f"""
-                    SELECT date_trunc('month', month)::date AS month,
-                           COUNT(*) AS crime_count,
-                           SUM({harm_case}) AS harm_total
-                    FROM crimes
-                    WHERE {' AND '.join(clauses)}
-                    GROUP BY month
-                    ORDER BY month
-                    """,
-                    params,
-                )
-                counts = {}
-                harms = {}
-                for row in cursor.fetchall():
-                    month = _format_month(row.get("month"))
-                    count = row.get("crime_count") or 0
-                    harm_total = row.get("harm_total") or 0
-                    if month:
-                        counts[month] = count
-                        harms[month] = harm_total
-                end_key = end or _format_month(coverage_end)
-                points, values = _build_timeseries_points(
-                    counts, harms, metric, population, start, end_key
-                )
-        finally:
-            conn.close()
-
-        numeric = [value for value in values if value is not None]
-        if points and len(numeric) >= 2:
-            return TimeSeriesResponse(
-                ward_code=ward_code,
-                ward_name=ward_name,
-                metric=metric,
-                crime_type=crime_type,
-                points=points,
-                summary=TimeSeriesSummary(**_series_summary(values)),
-                source="db",
-                coverage_start=start,
-                coverage_end=_format_month(coverage_end),
-            )
-
-    return _timeseries_from_csv(ward_code, metric, crime_type, start, end)
-
-
-@app.get("/api/gap-report")
-def gap_report():
-    _, source, dataset = _load_wards()
-    report = None
-    if source == "db":
-        dataset_version = dataset.get("dataset_version") if dataset else None
-        coverage_end = dataset.get("coverage_end") if dataset else None
-        report = _load_gap_report_from_db(dataset_version, coverage_end)
-    if not report:
-        report = _load_gap_report_from_csv(GAP_REPORT_PATH)
-        if not report:
-            return {}
-        return {
-            "checked_at": report.get("CheckedAt") or "",
-            "history_latest": report.get("HistoryLatest") or "",
-            "latest_available": report.get("LatestAvailable") or "",
-            "gap_months": _parse_int(report.get("GapMonths")),
-            "default_start_month": report.get("DefaultStartMonth") or "",
-        }
-    return report
-
-
-@app.get("/ops/status")
-def ops_status():
-    conn = _db_connect()
-    if conn:
-        try:
-            with conn.cursor() as cursor:
-                dataset = _latest_dataset(cursor)
-        finally:
-            conn.close()
-
-        if dataset:
-            last_run = dataset.get("finished_at") or dataset.get("started_at")
-            return {
-                "status": dataset.get("status") or "completed",
-                "dataset_version": dataset.get("dataset_version"),
-                "coverage_start": _format_month(dataset.get("coverage_start")),
-                "coverage_end": _format_month(dataset.get("coverage_end")),
-                "rows_loaded": dataset.get("rows_loaded"),
-                "last_run": last_run.isoformat() if last_run else None,
-                "source": "db",
-            }
-        return {
-            "status": "empty",
-            "dataset_version": None,
-            "coverage_start": None,
-            "coverage_end": None,
-            "rows_loaded": None,
-            "last_run": None,
-            "source": "db",
-        }
-
-    wards = _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH)
-    coverage_start, coverage_end = _coverage_from_wards(wards)
-    return {
-        "status": "csv",
-        "dataset_version": None,
         "coverage_start": coverage_start,
         "coverage_end": coverage_end,
-        "rows_loaded": None,
-        "last_run": None,
-        "source": "csv",
     }
 
 
-@app.get("/ops/jobs", tags=["ops"], response_model=OpsJobsResponse)
-def ops_jobs(limit: int = Query(20, ge=1, le=200)):
+@app.get("/api/v2/wards/{ward_code}", response_model=WardDetailResponse)
+def get_ward_detail(ward_code: str, limit: int = Query(12, ge=1, le=50)):
+    wards, dataset, source = _load_ward_dataset()
+    ward = _find_ward(wards, ward_code)
+    if not ward:
+        raise HTTPException(status_code=404, detail="ward_not_found")
+    payload = _ward_payload(ward)
+    coverage_start, coverage_end = _coverage_from_wards(wards)
+    coverage_start = _normalize_month(payload.get("first_month")) or coverage_start
+    coverage_end = _normalize_month(payload.get("last_month")) or coverage_end
+    crime_types = []
+    officials = []
+    if source == "db":
+        conn = _db_connect()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    dataset_version = dataset.get("dataset_version") if dataset else None
+                    coverage_end_db = dataset.get("coverage_end") if dataset else None
+                    if not dataset_version or not coverage_end_db:
+                        latest = _latest_ward_dataset(cursor)
+                        if latest:
+                            latest_dict = _row_to_dict(latest)
+                            dataset_version = dataset_version or latest_dict.get("dataset_version")
+                            coverage_end_db = coverage_end_db or latest_dict.get("coverage_end")
+                    if dataset_version and coverage_end_db:
+                        crime_types = _ward_type_trends_from_db(
+                            cursor,
+                            dataset_version,
+                            coverage_end_db,
+                            ward_code,
+                            limit=limit,
+                        )
+                    officials = _ward_officials_from_db(cursor, ward_code)
+            finally:
+                conn.close()
+    if not crime_types:
+        crime_types = _ward_type_trends_from_csv(
+            WARD_TYPE_TRENDS_PATH, ward_code, limit=limit
+        )
+    if not officials:
+        officials = _ward_officials_from_csv(WARD_OFFICIALS_PATH, ward_code)
+    return {
+        "ward": payload,
+        "rating_explain": _rating_explain(payload),
+        "crime_types": crime_types,
+        "officials": officials,
+        "source": source,
+        "coverage_start": coverage_start,
+        "coverage_end": coverage_end,
+    }
+
+
+@app.get("/api/v2/wards/{ward_code}/timeseries", response_model=TimeSeriesResponse)
+def get_ward_timeseries(
+    ward_code: str,
+    metric: Literal["rate", "count", "harm"] = "rate",
+    crime_type: str | None = Query(None, alias="type"),
+    window: int = Query(3, ge=1, le=12),
+):
+    wards, dataset, source = _load_ward_dataset()
+    ward = _find_ward(wards, ward_code)
+    if not ward:
+        raise HTTPException(status_code=404, detail="ward_not_found")
+    payload = _ward_payload(ward)
+    coverage_start, coverage_end = _coverage_from_wards(wards)
+    coverage_start = _normalize_month(payload.get("first_month")) or coverage_start
+    coverage_end = _normalize_month(payload.get("last_month")) or coverage_end
+    counts, harms = _timeseries_from_csv(ward_code, crime_type)
+    series_source = "csv" if counts else None
+    if not counts:
+        counts, harms, db_source = _timeseries_from_db(ward_code, crime_type)
+        series_source = db_source or series_source
+    points, values = _build_timeseries_points(
+        counts,
+        harms,
+        metric,
+        payload.get("population"),
+        coverage_start,
+        coverage_end,
+    )
+    summary = _series_summary(values, window=window)
+    return {
+        "ward_code": payload.get("ward_code"),
+        "ward_name": payload.get("ward_name"),
+        "metric": metric,
+        "crime_type": crime_type,
+        "points": points,
+        "summary": summary,
+        "source": series_source or source,
+        "coverage_start": coverage_start,
+        "coverage_end": coverage_end,
+    }
+
+
+@app.get("/ops/status")
+def get_ops_status():
+    conn = _db_connect()
+    if conn:
+        try:
+            with conn.cursor() as cursor:
+                dataset = None
+                try:
+                    dataset = _latest_dataset(cursor)
+                except Exception:
+                    dataset = None
+                if not dataset:
+                    try:
+                        dataset = _latest_ward_dataset(cursor)
+                    except Exception:
+                        dataset = None
+                if not dataset:
+                    try:
+                        dataset = _latest_crime_dataset(cursor)
+                    except Exception:
+                        dataset = None
+            if dataset:
+                dataset = _row_to_dict(dataset)
+                return {
+                    "status": dataset.get("status") or "completed",
+                    "dataset_version": dataset.get("dataset_version"),
+                    "coverage_start": _format_month(dataset.get("coverage_start")),
+                    "coverage_end": _format_month(dataset.get("coverage_end")),
+                    "rows_loaded": dataset.get("rows_loaded"),
+                    "last_run": _serialize_datetime(
+                        dataset.get("finished_at") or dataset.get("started_at")
+                    ),
+                    "source": "db",
+                }
+        finally:
+            conn.close()
+    wards, dataset, source = _load_ward_dataset()
+    coverage_start, coverage_end = _coverage_from_wards(wards)
+    last_run = None
+    if os.path.exists(WARD_ANALYSIS_PATH):
+        last_run = datetime.fromtimestamp(
+            os.path.getmtime(WARD_ANALYSIS_PATH), tz=timezone.utc
+        ).isoformat()
+    return {
+        "status": "ready" if wards else "missing",
+        "dataset_version": dataset.get("dataset_version") if dataset else None,
+        "coverage_start": coverage_start,
+        "coverage_end": coverage_end,
+        "rows_loaded": len(wards) if wards else None,
+        "last_run": last_run,
+        "source": source,
+    }
+
+
+@app.get("/ops/jobs", response_model=OpsJobsResponse)
+def get_ops_jobs(
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     conn = _db_connect()
     if not conn:
-        return OpsJobsResponse(source="csv", jobs=[])
-
+        return {"source": "none", "jobs": []}
+    jobs = []
     try:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -2234,208 +1819,171 @@ def ops_jobs(limit: int = Query(20, ge=1, le=200)):
                 SELECT id, dataset_version, coverage_start, coverage_end, status, source,
                        started_at, finished_at, rows_loaded, notes
                 FROM job_runs
-                ORDER BY started_at DESC NULLS LAST
-                LIMIT %s
+                ORDER BY started_at DESC
+                LIMIT %s OFFSET %s
                 """,
-                (limit,),
+                (limit, offset),
             )
-            rows = cursor.fetchall()
+            for row in cursor.fetchall():
+                row_dict = dict(row) if not isinstance(row, dict) else row
+                jobs.append(
+                    {
+                        "id": row_dict.get("id"),
+                        "dataset_version": row_dict.get("dataset_version"),
+                        "coverage_start": _format_month(row_dict.get("coverage_start")),
+                        "coverage_end": _format_month(row_dict.get("coverage_end")),
+                        "status": row_dict.get("status"),
+                        "source": row_dict.get("source"),
+                        "started_at": _serialize_datetime(row_dict.get("started_at")),
+                        "finished_at": _serialize_datetime(row_dict.get("finished_at")),
+                        "rows_loaded": row_dict.get("rows_loaded"),
+                        "notes": row_dict.get("notes"),
+                        "log_url": None,
+                    }
+                )
+    except Exception:
+        return {"source": "none", "jobs": []}
     finally:
         conn.close()
-
-    log_base = os.getenv("CRIMEMAP_JOB_LOG_BASE")
-    jobs = []
-    for row in rows:
-        log_url = None
-        if log_base:
-            log_url = f"{log_base.rstrip('/')}/{row.get('id')}"
-        jobs.append(
-            {
-                "id": row.get("id"),
-                "dataset_version": row.get("dataset_version"),
-                "coverage_start": _format_month(row.get("coverage_start")),
-                "coverage_end": _format_month(row.get("coverage_end")),
-                "status": row.get("status"),
-                "source": row.get("source"),
-                "started_at": row.get("started_at").isoformat()
-                if row.get("started_at")
-                else None,
-                "finished_at": row.get("finished_at").isoformat()
-                if row.get("finished_at")
-                else None,
-                "rows_loaded": row.get("rows_loaded"),
-                "notes": row.get("notes"),
-                "log_url": log_url,
-            }
-        )
-    return OpsJobsResponse(source="db", jobs=jobs)
+    return {"source": "db", "jobs": jobs}
 
 
-@app.get("/ops/quality", tags=["ops"], response_model=OpsQualityResponse)
-def ops_quality():
-    conn = _db_connect()
-    if conn:
-        try:
-            with conn.cursor() as cursor:
-                dataset = _latest_dataset(cursor) or _latest_ward_dataset(cursor)
-                if not dataset:
-                    return OpsQualityResponse(source="db", confidence_counts={})
-                dataset_version = dataset.get("dataset_version")
-                coverage_end = dataset.get("coverage_end")
-                coverage_start = dataset.get("coverage_start")
-                cursor.execute(
-                    f"""
-                    SELECT
-                        COUNT(*) AS total,
-                        SUM(CASE WHEN population IS NULL OR population = 0 THEN 1 ELSE 0 END) AS missing_population,
-                        SUM(CASE WHEN months IS NULL OR months < 6 THEN 1 ELSE 0 END) AS short_history,
-                        SUM(CASE WHEN {COVERAGE_CONFIDENCE_SQL} = 'high' THEN 1 ELSE 0 END) AS high_confidence,
-                        SUM(CASE WHEN {COVERAGE_CONFIDENCE_SQL} = 'medium' THEN 1 ELSE 0 END) AS medium_confidence,
-                        SUM(CASE WHEN {COVERAGE_CONFIDENCE_SQL} = 'low' THEN 1 ELSE 0 END) AS low_confidence
-                    FROM ward_metrics
-                    WHERE dataset_version = %s AND coverage_end = %s
-                    """,
-                    (dataset_version, coverage_end),
-                )
-                stats = cursor.fetchone() or {}
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) AS crime_rows,
-                           SUM(
-                               CASE
-                                   WHEN longitude IS NULL OR latitude IS NULL THEN 1
-                                   WHEN latitude NOT BETWEEN -90 AND 90 THEN 1
-                                   WHEN longitude NOT BETWEEN -180 AND 180 THEN 1
-                                   ELSE 0
-                               END
-                           ) AS invalid_coords
-                    FROM crimes
-                    WHERE dataset_version = %s
-                    """,
-                    (dataset_version,),
-                )
-                crime_stats = cursor.fetchone() or {}
-                gap_report = _load_gap_report_from_db(dataset_version, coverage_end)
-        finally:
-            conn.close()
-
-        total = stats.get("total") or 0
-        missing = stats.get("missing_population") or 0
-        short_history = stats.get("short_history") or 0
-        return OpsQualityResponse(
-            source="db",
-            dataset_version=dataset_version,
-            coverage_start=_format_month(coverage_start),
-            coverage_end=_format_month(coverage_end),
-            population_missing=missing,
-            population_missing_pct=round(missing / total * 100, 2) if total else None,
-            short_history=short_history,
-            short_history_pct=round(short_history / total * 100, 2) if total else None,
-            invalid_coords=crime_stats.get("invalid_coords") or 0,
-            invalid_coords_pct=(
-                round((crime_stats.get("invalid_coords") or 0) / crime_stats.get("crime_rows") * 100, 2)
-                if crime_stats.get("crime_rows")
-                else None
-            ),
-            crime_rows=crime_stats.get("crime_rows") or 0,
-            ward_rows=total,
-            confidence_counts={
-                "high": stats.get("high_confidence") or 0,
-                "medium": stats.get("medium_confidence") or 0,
-                "low": stats.get("low_confidence") or 0,
-            },
-            gap_report=gap_report,
-        )
-
-    wards = _load_ward_analysis_from_csv(WARD_ANALYSIS_PATH)
-    total = len(wards)
-    missing = 0
-    short_history = 0
-    confidence_counts = {"high": 0, "medium": 0, "low": 0}
-    for row in wards:
-        payload = _ward_payload(row)
-        if "population_missing" in payload["coverage_flags"]:
-            missing += 1
-        if "short_history" in payload["coverage_flags"]:
-            short_history += 1
-        confidence = payload.get("coverage_confidence") or "low"
-        confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+@app.get("/ops/quality", response_model=OpsQualityResponse)
+def get_ops_quality():
+    wards, dataset, source = _load_ward_dataset()
     coverage_start, coverage_end = _coverage_from_wards(wards)
-    gap = _load_gap_report_from_csv(GAP_REPORT_PATH)
+    quality = _quality_from_wards(wards)
+    crime_rows = None
+    if source == "db":
+        conn = _db_connect()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    dataset_version = dataset.get("dataset_version") if dataset else None
+                    if dataset_version:
+                        cursor.execute(
+                            "SELECT COUNT(*) AS count FROM crimes WHERE dataset_version = %s",
+                            (dataset_version,),
+                        )
+                    else:
+                        cursor.execute("SELECT COUNT(*) AS count FROM crimes")
+                    row = cursor.fetchone()
+                    if row:
+                        crime_rows = _row_to_dict(row).get("count")
+            except Exception:
+                crime_rows = None
+            finally:
+                conn.close()
+    if crime_rows is None:
+        crime_rows = _count_csv_rows(CLEANED_CRIME_PATH)
+    invalid_coords = None
+    invalid_coords_pct = None
+    if invalid_coords is not None and crime_rows:
+        invalid_coords_pct = invalid_coords / crime_rows * 100
     gap_report = None
-    if gap:
-        gap_report = {
-            "checked_at": gap.get("CheckedAt") or "",
-            "history_latest": gap.get("HistoryLatest") or "",
-            "latest_available": gap.get("LatestAvailable") or "",
-            "gap_months": _parse_int(gap.get("GapMonths")),
-            "default_start_month": gap.get("DefaultStartMonth") or "",
-        }
-    return OpsQualityResponse(
-        source="csv",
-        dataset_version=None,
-        coverage_start=coverage_start,
-        coverage_end=coverage_end,
-        population_missing=missing,
-        population_missing_pct=round(missing / total * 100, 2) if total else None,
-        short_history=short_history,
-        short_history_pct=round(short_history / total * 100, 2) if total else None,
-        invalid_coords=None,
-        invalid_coords_pct=None,
-        crime_rows=None,
-        ward_rows=total,
-        confidence_counts=confidence_counts,
-        gap_report=gap_report,
-    )
+    if source == "db":
+        gap_report = _load_gap_report_from_db()
+    if not gap_report:
+        gap_report = _gap_report_payload(_load_gap_report_from_csv(GAP_REPORT_PATH))
+    response = {
+        "source": source,
+        "dataset_version": dataset.get("dataset_version") if dataset else None,
+        "coverage_start": coverage_start,
+        "coverage_end": coverage_end,
+        "population_missing": quality["population_missing"],
+        "population_missing_pct": quality["population_missing_pct"],
+        "short_history": quality["short_history"],
+        "short_history_pct": quality["short_history_pct"],
+        "invalid_coords": invalid_coords,
+        "invalid_coords_pct": invalid_coords_pct,
+        "crime_rows": crime_rows,
+        "ward_rows": len(wards) if wards else None,
+        "confidence_counts": quality["confidence_counts"],
+        "gap_report": gap_report,
+    }
+    return response
 
 
-@app.get("/api/v2/alerts/rules", tags=["v2", "alerts"], response_model=list[AlertRuleResponse])
+@app.get("/api/v2/alerts/rules", response_model=list[AlertRuleResponse])
 def list_alert_rules(
-    active: bool | None = Query(None),
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     conn = _db_connect()
     if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
+        return []
+    rows = []
     try:
         with conn.cursor() as cursor:
-            clauses = []
-            params = []
-            if active is not None:
-                clauses.append("is_active = %s")
-                params.append(active)
-            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
             cursor.execute(
-                f"""
-                SELECT *
+                """
+                SELECT id, name, description, rule_type, ward_code, metric, operator,
+                       threshold_value, threshold_number, filter_json, trigger_on,
+                       window_months, is_active, muted_until, notify_emails,
+                       created_at, updated_at
                 FROM alert_rules
-                {where}
-                ORDER BY id DESC
+                ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
                 """,
-                params + [limit, offset],
+                (limit, offset),
             )
             rows = cursor.fetchall()
     finally:
         conn.close()
-
     return [_alert_rule_row(row) for row in rows]
 
 
-@app.post("/api/v2/alerts/rules", tags=["v2", "alerts"], response_model=AlertRuleResponse)
-def create_alert_rule(payload: AlertRuleCreate):
-    if payload.rule_type == "ward" and not payload.ward_code:
-        raise HTTPException(status_code=400, detail="ward_code is required for ward rules")
-    if payload.rule_type == "ward" and not payload.metric:
-        raise HTTPException(status_code=400, detail="metric is required for ward rules")
-    if payload.rule_type == "filter" and not (payload.filter_json or payload.metric):
-        raise HTTPException(status_code=400, detail="filter_json or metric is required")
-
+@app.get("/api/v2/alerts/events", response_model=AlertEventListResponse)
+def list_alert_events(
+    status: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     conn = _db_connect()
     if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
-    muted_until = _parse_iso_datetime(payload.muted_until)
+        return {"items": [], "total": 0, "limit": limit, "offset": offset, "source": "none"}
+    items = []
+    total = 0
+    try:
+        with conn.cursor() as cursor:
+            params = []
+            where = ""
+            if status:
+                where = "WHERE e.status = %s"
+                params.append(status)
+            cursor.execute(
+                f"""
+                SELECT e.*, r.name AS rule_name, r.rule_type AS rule_type
+                FROM alert_events e
+                LEFT JOIN alert_rules r ON e.alert_rule_id = r.id
+                {where}
+                ORDER BY e.triggered_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                params + [limit, offset],
+            )
+            for row in cursor.fetchall():
+                items.append(_alert_event_row(row))
+            cursor.execute(
+                f"SELECT COUNT(*) AS count FROM alert_events e {where}",
+                params,
+            )
+            row = cursor.fetchone()
+            if row:
+                total = _row_to_dict(row).get("count") or 0
+    finally:
+        conn.close()
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "source": "db"}
+
+
+@app.post("/api/v2/alerts/rules", response_model=AlertRuleResponse)
+def create_alert_rule(payload: AlertRuleCreate):
+    conn = _db_connect()
+    if not conn:
+        raise HTTPException(status_code=503, detail="alerts_not_configured")
+    data = payload.model_dump()
+    notify_emails = _normalize_emails(data.get("notify_emails"))
+    muted_until = _parse_iso_datetime(data.get("muted_until"))
     try:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -2443,208 +1991,100 @@ def create_alert_rule(payload: AlertRuleCreate):
                 INSERT INTO alert_rules (
                     name, description, rule_type, ward_code, metric, operator,
                     threshold_value, threshold_number, filter_json, trigger_on,
-                    window_months, is_active, muted_until, notify_emails, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    window_months, is_active, muted_until, notify_emails
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
                 RETURNING *
                 """,
                 (
-                    payload.name,
-                    payload.description,
-                    payload.rule_type,
-                    payload.ward_code,
-                    payload.metric,
-                    payload.operator,
-                    payload.threshold_value,
-                    payload.threshold_number,
-                    json.dumps(payload.filter_json) if payload.filter_json else None,
-                    payload.trigger_on,
-                    payload.window_months,
-                    payload.is_active,
+                    data.get("name"),
+                    data.get("description"),
+                    data.get("rule_type"),
+                    data.get("ward_code"),
+                    data.get("metric"),
+                    data.get("operator"),
+                    data.get("threshold_value"),
+                    data.get("threshold_number"),
+                    json.dumps(data.get("filter_json")) if data.get("filter_json") else None,
+                    data.get("trigger_on") or "enter",
+                    data.get("window_months"),
+                    data.get("is_active", True),
                     muted_until,
-                    payload.notify_emails,
+                    notify_emails,
                 ),
             )
             row = cursor.fetchone()
-            conn.commit()
+        conn.commit()
     finally:
         conn.close()
-
     return _alert_rule_row(row)
 
 
-@app.put("/api/v2/alerts/rules/{rule_id}", tags=["v2", "alerts"], response_model=AlertRuleResponse)
+@app.put("/api/v2/alerts/rules/{rule_id}", response_model=AlertRuleResponse)
 def update_alert_rule(rule_id: int, payload: AlertRuleUpdate):
-    updates = []
-    params = []
-    fields = payload.model_dump(exclude_unset=True)
-    if not fields:
-        raise HTTPException(status_code=400, detail="No fields to update")
-
-    for key, value in fields.items():
-        if key == "filter_json":
-            updates.append("filter_json = %s")
-            params.append(json.dumps(value) if value else None)
-        elif key == "muted_until":
-            updates.append("muted_until = %s")
-            params.append(_parse_iso_datetime(value))
-        else:
-            updates.append(f"{key} = %s")
-            params.append(value)
-    updates.append("updated_at = NOW()")
-
     conn = _db_connect()
     if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
+        raise HTTPException(status_code=503, detail="alerts_not_configured")
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="no_fields_to_update")
+    if "notify_emails" in data:
+        data["notify_emails"] = _normalize_emails(data.get("notify_emails"))
+    if "muted_until" in data:
+        data["muted_until"] = _parse_iso_datetime(data.get("muted_until"))
+    if "filter_json" in data:
+        data["filter_json"] = (
+            json.dumps(data.get("filter_json")) if data.get("filter_json") else None
+        )
+    data["id"] = rule_id
+    fields = []
+    for key in data:
+        if key == "id":
+            continue
+        fields.append(sql.SQL("{} = {}").format(sql.Identifier(key), sql.Placeholder(key)))
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                f"""
-                UPDATE alert_rules
-                SET {', '.join(updates)}
-                WHERE id = %s
-                RETURNING *
-                """,
-                params + [rule_id],
-            )
+            query = sql.SQL(
+                "UPDATE alert_rules SET {fields}, updated_at = NOW() "
+                "WHERE id = %(id)s RETURNING *"
+            ).format(fields=sql.SQL(", ").join(fields))
+            cursor.execute(query, data)
             row = cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Alert rule not found")
-            conn.commit()
+        if not row:
+            raise HTTPException(status_code=404, detail="alert_rule_not_found")
+        conn.commit()
     finally:
         conn.close()
-
     return _alert_rule_row(row)
 
 
-@app.delete("/api/v2/alerts/rules/{rule_id}", tags=["v2", "alerts"])
+@app.delete("/api/v2/alerts/rules/{rule_id}")
 def delete_alert_rule(rule_id: int):
     conn = _db_connect()
     if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
+        raise HTTPException(status_code=503, detail="alerts_not_configured")
     try:
         with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM alert_rules WHERE id = %s", (rule_id,))
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Alert rule not found")
-            conn.commit()
+            cursor.execute(
+                "DELETE FROM alert_rules WHERE id = %s RETURNING id", (rule_id,)
+            )
+            row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="alert_rule_not_found")
+        conn.commit()
     finally:
         conn.close()
     return {"status": "deleted"}
 
 
-@app.post("/api/v2/alerts/rules/{rule_id}/mute", tags=["v2", "alerts"])
-def mute_alert_rule(rule_id: int, payload: AlertMuteRequest):
-    until = None
-    if payload.until:
-        until = _parse_iso_datetime(payload.until)
-    elif payload.hours:
-        until = datetime.now(timezone.utc) + timedelta(hours=payload.hours)
-
+@app.post("/api/v2/alerts/events/{event_id}/acknowledge")
+def acknowledge_alert_event(event_id: int):
     conn = _db_connect()
     if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE alert_rules SET muted_until = %s, updated_at = NOW() WHERE id = %s",
-                (until, rule_id),
-            )
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Alert rule not found")
-            conn.commit()
-    finally:
-        conn.close()
-    return {"status": "muted", "muted_until": _serialize_datetime(until)}
-
-
-@app.post("/api/v2/alerts/rules/{rule_id}/unmute", tags=["v2", "alerts"])
-def unmute_alert_rule(rule_id: int):
-    conn = _db_connect()
-    if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE alert_rules SET muted_until = NULL, updated_at = NOW() WHERE id = %s",
-                (rule_id,),
-            )
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Alert rule not found")
-            conn.commit()
-    finally:
-        conn.close()
-    return {"status": "unmuted"}
-
-
-@app.get(
-    "/api/v2/alerts/events",
-    tags=["v2", "alerts"],
-    response_model=AlertEventListResponse,
-)
-def list_alert_events(
-    status: str | None = Query(None),
-    rule_id: int | None = Query(None),
-    ward_code: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-):
-    conn = _db_connect()
-    if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
-    try:
-        with conn.cursor() as cursor:
-            clauses = []
-            params = []
-            if status:
-                clauses.append("e.status = %s")
-                params.append(status)
-            if rule_id:
-                clauses.append("e.alert_rule_id = %s")
-                params.append(rule_id)
-            if ward_code:
-                clauses.append("e.ward_code = %s")
-                params.append(ward_code)
-            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-
-            cursor.execute(
-                f"""
-                SELECT COUNT(*) AS total
-                FROM alert_events e
-                {where}
-                """,
-                params,
-            )
-            total = cursor.fetchone().get("total") or 0
-
-            cursor.execute(
-                f"""
-                SELECT e.*, r.name AS rule_name, r.rule_type AS rule_type
-                FROM alert_events e
-                JOIN alert_rules r ON r.id = e.alert_rule_id
-                {where}
-                ORDER BY e.triggered_at DESC
-                LIMIT %s OFFSET %s
-                """,
-                params + [limit, offset],
-            )
-            rows = cursor.fetchall()
-    finally:
-        conn.close()
-
-    return AlertEventListResponse(
-        items=[_alert_event_row(row) for row in rows],
-        total=total,
-        limit=limit,
-        offset=offset,
-        source="db",
-    )
-
-
-@app.post("/api/v2/alerts/events/{event_id}/acknowledge", tags=["v2", "alerts"])
-def acknowledge_alert(event_id: int):
-    conn = _db_connect()
-    if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
+        raise HTTPException(status_code=503, detail="alerts_not_configured")
     try:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -2657,30 +2097,66 @@ def acknowledge_alert(event_id: int):
                 (event_id,),
             )
             row = cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Alert event not found")
-            conn.commit()
-    finally:
-        conn.close()
-    return {"status": "acknowledged", "id": event_id}
-
-
-@app.post("/ops/alerts/evaluate", tags=["ops"])
-def evaluate_alerts():
-    conn = _db_connect()
-    if not conn:
-        raise HTTPException(status_code=503, detail="Database not available")
-    try:
-        result = _evaluate_alerts(conn)
+        if not row:
+            raise HTTPException(status_code=404, detail="alert_event_not_found")
         conn.commit()
     finally:
         conn.close()
-    return result
+    return {"status": "acknowledged"}
 
 
-@app.get("/api/map")
-def map_info():
-    return {
-        "wards_map_url": "/assets/wards_interactive_map.html",
-        "exists": os.path.exists(WARDS_MAP_PATH),
-    }
+@app.post("/api/v2/alerts/rules/{rule_id}/mute")
+def mute_alert_rule(rule_id: int, payload: AlertMuteRequest):
+    conn = _db_connect()
+    if not conn:
+        raise HTTPException(status_code=503, detail="alerts_not_configured")
+    until = None
+    if payload.until:
+        until = _parse_iso_datetime(payload.until)
+    elif payload.hours:
+        until = datetime.now(timezone.utc) + timedelta(hours=payload.hours)
+    if not until:
+        raise HTTPException(status_code=400, detail="mute_until_required")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE alert_rules
+                SET muted_until = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+                """,
+                (until, rule_id),
+            )
+            row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="alert_rule_not_found")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "muted"}
+
+
+@app.post("/api/v2/alerts/rules/{rule_id}/unmute")
+def unmute_alert_rule(rule_id: int):
+    conn = _db_connect()
+    if not conn:
+        raise HTTPException(status_code=503, detail="alerts_not_configured")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE alert_rules
+                SET muted_until = NULL, updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+                """,
+                (rule_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="alert_rule_not_found")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "unmuted"}

@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 export default function StatusMessage({
   loading,
   error,
@@ -14,3 +16,12 @@ export default function StatusMessage({
   }
   return null;
 }
+
+StatusMessage.propTypes = {
+  loading: PropTypes.bool,
+  error: PropTypes.oneOfType([PropTypes.string, PropTypes.instanceOf(Error)]),
+  loadingText: PropTypes.string,
+  errorText: PropTypes.string,
+  className: PropTypes.string,
+  as: PropTypes.elementType,
+};

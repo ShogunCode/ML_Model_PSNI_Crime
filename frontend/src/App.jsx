@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import PropTypes from "prop-types";
 import { api, assets, API_BASE } from "./api/client.js";
 import StatusMessage from "./components/StatusMessage.jsx";
 import { bandClass } from "./domain/ratings.js";
@@ -111,12 +112,30 @@ const partyLogoFor = (party) => {
   return null;
 };
 
+const ALERT_OPERATOR_OPTIONS = {
+  text: [
+    { id: "eq", label: "is" },
+    { id: "neq", label: "is not" },
+    { id: "contains", label: "contains" },
+  ],
+  number: [
+    { id: "gte", label: ">=" },
+    { id: "lte", label: "<=" },
+    { id: "gt", label: ">" },
+    { id: "lt", label: "<" },
+  ],
+};
+
 const InfoTip = ({ text }) => (
   <span className="info-icon" tabIndex="0" aria-label="More info">
     i
     <span className="info-tooltip">{text}</span>
   </span>
 );
+
+InfoTip.propTypes = {
+  text: PropTypes.string.isRequired,
+};
 
 const resolveMapUrl = (url) => {
   if (!url) return "";
@@ -459,7 +478,6 @@ export default function App() {
   ]);
 
   const watchlist = useMemo(() => wardRows, [wardRows]);
-  const directory = useMemo(() => wardRows, [wardRows]);
   const selectedWard =
     wardDetail?.ward ||
     watchlist.find((row) => row.ward_code === selectedWardCode) ||
@@ -534,20 +552,6 @@ export default function App() {
     { id: "rate_percentile", label: "Rate percentile", type: "number" },
     { id: "coverage_confidence", label: "Coverage confidence", type: "text" },
   ];
-  const alertOperatorOptions = {
-    text: [
-      { id: "eq", label: "is" },
-      { id: "neq", label: "is not" },
-      { id: "contains", label: "contains" },
-    ],
-    number: [
-      { id: "gte", label: ">=" },
-      { id: "lte", label: "<=" },
-      { id: "gt", label: ">" },
-      { id: "lt", label: "<" },
-    ],
-  };
-
   const metricLabel =
     metricFocus === "yoy"
       ? "YoY change"
@@ -562,17 +566,16 @@ export default function App() {
     return formatNumber(row.crime_rate_per_100k);
   };
 
-  const metricSparkline = summary?.sparkline || [];
   const sparklinePoints = useMemo(
-    () => buildSparklinePoints(metricSparkline),
-    [metricSparkline]
+    () => buildSparklinePoints(summary?.sparkline || []),
+    [summary?.sparkline]
   );
 
-  const seriesPoints = timeseries?.points || [];
-  const seriesPath = useMemo(
-    () => buildSeriesPath(seriesPoints),
-    [seriesPoints]
+  const seriesPoints = useMemo(
+    () => timeseries?.points || [],
+    [timeseries?.points]
   );
+  const seriesPath = useMemo(() => buildSeriesPath(seriesPoints), [seriesPoints]);
   const seriesChartPoints = useMemo(
     () => buildSeriesCoordinates(seriesPoints),
     [seriesPoints]
@@ -618,11 +621,11 @@ export default function App() {
       : activeSeriesMetric === "harm"
         ? "Harm / 100k"
         : "Rate / 100k";
-  const formatSeriesValue = (value) => {
+  const formatSeriesValue = useCallback((value) => {
     if (value === null || value === undefined) return "N/A";
     if (activeSeriesMetric === "count") return formatNumber(value);
     return formatRate(value);
-  };
+  }, [activeSeriesMetric]);
   const seriesHoverPoint =
     seriesHoverIndex !== null ? seriesChartPoints[seriesHoverIndex] : null;
   const seriesHoverChange = useMemo(() => {
@@ -652,7 +655,7 @@ export default function App() {
     return `Last ${seriesSummary.window}-mo avg ${formatSeriesValue(
       seriesSummary.latest_avg
     )} vs prior ${formatSeriesValue(seriesSummary.prior_avg)} (${changeLabel}, ${pctLabel}).`;
-  }, [seriesSummary, activeSeriesMetric]);
+  }, [seriesSummary, formatSeriesValue]);
 
   const handleSeriesHover = (event) => {
     if (!seriesChartPoints.length) return;
@@ -729,7 +732,7 @@ export default function App() {
   const selectedAlertMetric =
     alertMetricOptions.find((option) => option.id === newAlert.metric) ||
     alertMetricOptions[0];
-  const alertOperators = alertOperatorOptions[selectedAlertMetric.type] || [];
+  const alertOperators = ALERT_OPERATOR_OPTIONS[selectedAlertMetric.type] || [];
   const pageStart = wardTotal ? pageIndex * pageSize + 1 : 0;
   const pageEnd = wardTotal
     ? Math.min(wardTotal, (pageIndex + 1) * pageSize)
@@ -737,26 +740,26 @@ export default function App() {
   const pageCount = wardTotal ? Math.ceil(wardTotal / pageSize) : 1;
 
   useEffect(() => {
-    const operators = alertOperatorOptions[selectedAlertMetric.type] || [];
+    const operators = ALERT_OPERATOR_OPTIONS[selectedAlertMetric.type] || [];
     if (!operators.length) return;
-    const hasOperator = operators.some(
-      (option) => option.id === newAlert.operator
-    );
-    let nextAlert = newAlert;
-    if (!hasOperator) {
-      nextAlert = { ...nextAlert, operator: operators[0].id };
-    }
-    if (selectedAlertMetric.type === "number") {
-      if (nextAlert.threshold && Number.isNaN(Number(nextAlert.threshold))) {
-        nextAlert = { ...nextAlert, threshold: "" };
+    setNewAlert((prev) => {
+      let nextAlert = prev;
+      const hasOperator = operators.some(
+        (option) => option.id === prev.operator
+      );
+      if (!hasOperator) {
+        nextAlert = { ...nextAlert, operator: operators[0].id };
       }
-    } else if (!nextAlert.threshold) {
-      nextAlert = { ...nextAlert, threshold: "High" };
-    }
-    if (nextAlert !== newAlert) {
-      setNewAlert(nextAlert);
-    }
-  }, [newAlert.metric, newAlert.operator, selectedAlertMetric.type]);
+      if (selectedAlertMetric.type === "number") {
+        if (nextAlert.threshold && Number.isNaN(Number(nextAlert.threshold))) {
+          nextAlert = { ...nextAlert, threshold: "" };
+        }
+      } else if (!nextAlert.threshold) {
+        nextAlert = { ...nextAlert, threshold: "High" };
+      }
+      return nextAlert === prev ? prev : nextAlert;
+    });
+  }, [selectedAlertMetric.type]);
 
   const trendClass = (value) => {
     const num = Number(value);
