@@ -771,6 +771,7 @@ def run_pipeline(args):
         )
 
     cluster_level = args.cluster_level
+    wards_geo = None
 
     # Extract coordinates in (lat, lon) order for haversine
     if cluster_level == "ward":
@@ -881,6 +882,8 @@ def run_pipeline(args):
     
     # identify high-density crime areas
     if cluster_level == "ward":
+        if wards_geo is None:
+            raise RuntimeError("Ward geometry not available for ward-level clustering.")
         ward_clusters = wards_geo.copy()
         ward_clusters["Cluster"] = labels
         clusters = ward_clusters[ward_clusters["Cluster"] != -1].copy()

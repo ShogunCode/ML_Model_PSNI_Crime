@@ -1,5 +1,4 @@
 import folium
-import geopandas as gpd
 import pandas as pd
 import matplotlib.cm as cm
 import matplotlib.colors as colors

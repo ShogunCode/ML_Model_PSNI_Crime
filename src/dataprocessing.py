@@ -1,6 +1,5 @@
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Point
 import os
 
 def _dissolve_ward_duplicates(wards):

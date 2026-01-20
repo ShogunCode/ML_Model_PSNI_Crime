@@ -2,13 +2,12 @@ import argparse
 import os
 import sys
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, ROOT_DIR)
-
-from src.postgres_writer import load_from_csvs
-
 
 def main():
+    root_dir = os.path.dirname(os.path.dirname(__file__))
+    sys.path.insert(0, root_dir)
+    from src.postgres_writer import load_from_csvs
+
     parser = argparse.ArgumentParser(description="Load CSV outputs into Postgres.")
     parser.add_argument("--url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--host", default=os.getenv("POSTGRES_HOST", "localhost"))

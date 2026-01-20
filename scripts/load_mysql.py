@@ -2,13 +2,12 @@ import argparse
 import os
 import sys
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, ROOT_DIR)
-
-from src.mysql_writer import load_from_csvs
-
 
 def main():
+    root_dir = os.path.dirname(os.path.dirname(__file__))
+    sys.path.insert(0, root_dir)
+    from src.mysql_writer import load_from_csvs
+
     parser = argparse.ArgumentParser(description="Load CSV outputs into MySQL.")
     parser.add_argument("--host", default=os.getenv("MYSQL_HOST", "localhost"))
     parser.add_argument("--port", type=int, default=int(os.getenv("MYSQL_PORT", "3306")))
